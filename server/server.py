@@ -1078,18 +1078,43 @@ async def submit_xp(xp_data: XPSubmit, current_user: Dict = Depends(verify_token
         all_submitted = all(p[5] and p[5].strip() for p in players)  # xp_content字段
         
         if all_submitted:
-            # 随机选择一个玩家的XP作为公开XP
-            selected_player = random.choice(players)
+            # 找到狼人玩家并公布其XP
+            wolf_players = [p for p in players if p[3]]  # is_wolf字段为True的玩家
             
-            # 更新游戏状态为投票阶段，并设置公开的XP
-            cursor.execute(
-                "UPDATE games SET status = 'voting', public_xp = ? WHERE id = ?",
-                (selected_player[5], xp_data.game_id)
-            )
-            message = "XP提交成功，游戏进入投票阶段"
-            
-            # 通知游戏状态更新
-            await notify_game_update(xp_data.game_id, 'xp_phase_complete', {'status': 'voting'})
+            if wolf_players:
+                # 如果有多个狼人，随机选择一个狼人的XP作为公开XP
+                selected_wolf = random.choice(wolf_players)
+                selected_xp = selected_wolf[5]  # xp_content字段
+                
+                print(f"公开狼人XP: 狼人玩家 {selected_wolf[2]} 的XP: '{selected_xp}'")
+                
+                # 更新游戏状态为投票阶段，并设置公开的XP
+                cursor.execute(
+                    "UPDATE games SET status = 'voting', public_xp = ? WHERE id = ?",
+                    (selected_xp, xp_data.game_id)
+                )
+                message = "XP提交成功，游戏进入投票阶段"
+                
+                # 通知游戏状态更新
+                await notify_game_update(xp_data.game_id, 'xp_phase_complete', {
+                    'status': 'voting',
+                    'public_xp': selected_xp
+                })
+            else:
+                # 理论上不应该发生，但作为备用处理
+                print("警告: 没有找到狼人玩家！")
+                random_player = random.choice(players)
+                cursor.execute(
+                    "UPDATE games SET status = 'voting', public_xp = ? WHERE id = ?",
+                    (random_player[5], xp_data.game_id)
+                )
+                message = "XP提交成功，游戏进入投票阶段"
+                
+                # 通知游戏状态更新
+                await notify_game_update(xp_data.game_id, 'xp_phase_complete', {
+                    'status': 'voting',
+                    'public_xp': random_player[5]
+                })
         else:
             message = "XP提交成功，等待其他玩家"
             
