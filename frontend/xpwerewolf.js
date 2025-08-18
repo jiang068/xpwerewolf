@@ -12712,7 +12712,8 @@ if (typeof document < "u") {
 }
 const currentHost = window.location.hostname;
 const currentPort = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
-const serverPort = '5050';
+// 使用当前页面的端口，如果前端和后端在同一个服务器上
+const serverPort = currentPort;
 const baseUrl = `${window.location.protocol}//${currentHost}:${serverPort}`;
 const t1 = `${baseUrl}/api`,
     n1 = baseUrl;

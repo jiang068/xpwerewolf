@@ -13,6 +13,10 @@ import sqlite3
 import asyncio
 import signal
 import sys
+import random
+import secrets
+import time
+import hashlib
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any
 import socketio
@@ -34,6 +38,12 @@ from config import (
     get_database_dir, get_database_path, get_players_dir, 
     get_frontend_file_path
 )
+
+# 初始化随机数生成器以确保更好的随机性
+random.seed()
+# 使用系统时间和随机数增强随机性
+import time
+random.seed(int(time.time() * 1000000) % (2**32))
 
 # 创建FastAPI应用
 app = FastAPI(title="XP狼人杀服务器")
@@ -376,13 +386,74 @@ class GameExit(BaseModel):
 # 工具函数
 def generate_room_code() -> str:
     """生成随机房间号"""
-    import random
     return str(random.randint(1000, 9999))
 
 def generate_xp_content() -> str:
     """生成狼人杀XP内容"""
-    import random
     return random.choice(GAME_CONFIG["XP_CONTENTS"])
+
+def shuffle_roles(player_count: int) -> List[bool]:
+    """
+    改进的角色分配函数，确保真正的随机性
+    返回角色列表，True表示狼人，False表示村民
+    """
+    wolf_count = max(1, int(player_count * GAME_CONFIG["WOLF_RATIO"]))
+    
+    if GAME_CONFIG.get("DEBUG_ROLE_ASSIGNMENT", False):
+        print(f"玩家总数: {player_count}, 狼人数: {wolf_count}, 村民数: {player_count - wolf_count}")
+    
+    # 创建角色列表
+    roles = [True] * wolf_count + [False] * (player_count - wolf_count)
+    
+    # 多层随机化策略，确保极高的随机性
+    import time
+    import hashlib
+    
+    # 1. 使用高精度时间、进程ID和随机数创建随机种子
+    current_microseconds = int(time.time() * 1000000)
+    process_id = os.getpid()
+    random_bytes = secrets.token_bytes(16)
+    
+    # 创建复合种子
+    seed_string = f"{current_microseconds}_{process_id}_{random_bytes.hex()}_{player_count}"
+    seed_hash = hashlib.sha256(seed_string.encode()).hexdigest()
+    seed_value = int(seed_hash[:8], 16)  # 取前8个十六进制字符作为种子
+    
+    # 2. 重新初始化随机数生成器
+    random.seed(seed_value)
+    
+    # 3. 使用 secrets 模块进行第一轮打乱
+    for i in range(len(roles)):
+        j = secrets.randbelow(len(roles))
+        roles[i], roles[j] = roles[j], roles[i]
+    
+    # 4. 使用标准 random 进行多轮打乱
+    for round_num in range(3):  # 进行3轮打乱
+        random.shuffle(roles)
+        
+        # 每轮中再进行手动交换
+        for _ in range(player_count * 2):  # 交换次数与玩家数成比例
+            i = random.randint(0, len(roles) - 1)
+            j = random.randint(0, len(roles) - 1)
+            roles[i], roles[j] = roles[j], roles[i]
+    
+    # 5. 最后使用时间戳进行额外打乱
+    final_time = int(time.time() * 1000000) % 1000
+    for _ in range(final_time % 20 + 10):  # 10-29次额外交换
+        i = secrets.randbelow(len(roles))
+        j = secrets.randbelow(len(roles))
+        roles[i], roles[j] = roles[j], roles[i]
+    
+    # 验证角色分配（仅在调试模式下显示）
+    if GAME_CONFIG.get("DEBUG_ROLE_ASSIGNMENT", False):
+        wolf_assigned = sum(roles)
+        wolf_positions = [i for i, is_wolf in enumerate(roles) if is_wolf]
+        print(f"角色分配完成: 狼人 {wolf_assigned} 人, 村民 {len(roles) - wolf_assigned} 人")
+        print(f"狼人位置: {wolf_positions}")
+        print(f"角色序列: {['狼人' if r else '村民' for r in roles]}")
+        print(f"种子值: {seed_value} (基于时间: {current_microseconds})")
+    
+    return roles
 
 # 健康检查和基础API
 @app.get("/api/health")
@@ -859,18 +930,16 @@ async def start_game(start_data: RoomStart, current_user: Dict = Depends(verify_
             (game_id, start_data.room_id, 'submitting_xp')
         )
         
-        # 分配角色 (1/3 狼人, 2/3 村民)
+        # 分配角色 (使用改进的随机分配函数)
         player_count = len(members)
-        wolf_count = max(1, int(player_count * GAME_CONFIG["WOLF_RATIO"]))
-        roles = [True] * wolf_count + [False] * (player_count - wolf_count)
-        
-        # 随机打乱角色
-        import random
-        random.shuffle(roles)
+        roles = shuffle_roles(player_count)
         
         # 创建游戏玩家
         for i, member in enumerate(members):
             player_id = str(uuid.uuid4())
+            if GAME_CONFIG.get("DEBUG_ROLE_ASSIGNMENT", False):
+                role_name = "狼人" if roles[i] else "村民"
+                print(f"玩家 {member[2]} 分配角色: {role_name}")
             cursor.execute(
                 "INSERT INTO game_players (id, game_id, user_id, is_wolf) VALUES (?, ?, ?, ?)",
                 (player_id, game_id, member[2], roles[i])
@@ -1010,7 +1079,6 @@ async def submit_xp(xp_data: XPSubmit, current_user: Dict = Depends(verify_token
         
         if all_submitted:
             # 随机选择一个玩家的XP作为公开XP
-            import random
             selected_player = random.choice(players)
             
             # 更新游戏状态为投票阶段，并设置公开的XP

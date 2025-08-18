@@ -9,7 +9,7 @@ import os
 
 # 服务器配置
 SERVER_CONFIG = {
-    "PORT": 5050,
+    "PORT": 12741,
     "HOST": "0.0.0.0",
     "LOG_LEVEL": "info",
     "DEBUG": False
@@ -47,6 +47,7 @@ GAME_CONFIG = {
     "MIN_PLAYERS": 4,
     "DEFAULT_MAX_PLAYERS": 8,
     "WOLF_RATIO": 1/3,  # 狼人比例
+    "DEBUG_ROLE_ASSIGNMENT": False,  # 是否显示角色分配调试信息
     "XP_CONTENTS": [
         "今晚月色真美，适合做点什么...",
         "我有一个秘密，但我不能说...",
