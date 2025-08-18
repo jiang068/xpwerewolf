@@ -13141,7 +13141,7 @@ function r1() {
         },
         R = () => {
             var Dt;
-            const [L, Y] = x.useState(null), [H, ee] = x.useState(""), [oe, te] = x.useState(!1), [le, Se] = x.useState(null), [T, I] = x.useState(!1), [B, W] = x.useState(null), [Q, ue] = x.useState(!1), [J, ce] = x.useState(!1), [Me, ht] = x.useState({}), [Ai, Le] = x.useState(null);
+            const [L, Y] = x.useState(null), [H, ee] = x.useState(""), [discussionContent, setDiscussionContent] = x.useState(""), [oe, te] = x.useState(!1), [le, Se] = x.useState(null), [T, I] = x.useState(!1), [B, W] = x.useState(null), [Q, ue] = x.useState(!1), [J, ce] = x.useState(!1), [Me, ht] = x.useState({}), [Ai, Le] = x.useState(null);
             x.useEffect(() => {
                 if (a) {
                     St();
@@ -13176,6 +13176,9 @@ function r1() {
                             nickname: q.killed_nickname,
                             xp: q.killed_xp
                         }), I(!1), Se(null), ht({}), Le(null), c("info", "新回合开始", "")
+                    }), A.on("discussion_submitted", q => {
+                        // 当收到讨论提交事件时，立即刷新游戏状态
+                        St();
                     });
                     const ae = setInterval(St, 1500);
                     return () => {
@@ -13253,6 +13256,18 @@ function r1() {
                 } finally {
                     ue(!1)
                 }
+            }, submitDiscussion = async (discussionContent) => {
+                ue(!0);
+                try {
+                    await N("/game/submit-discussion", "POST", {
+                        game_id: a,
+                        content: discussionContent || ""
+                    }), ce(!0), setDiscussionContent("")
+                } catch (A) {
+                    c("error", "错误", A.message)
+                } finally {
+                    ue(!1)
+                }
             }, Ll = async () => {
                 ce(!0);
                 try {
@@ -13271,11 +13286,21 @@ function r1() {
                     className: "w-12 h-12 text-pink-400 animate-spin"
                 })
             });
-            const {
-                game: et,
-                players: Ye,
-                my_role: Fi
-            } = L, jn = (Ye == null ? void 0 : Ye.filter(A => A.is_alive)) || [], Te = Ye == null ? void 0 : Ye.find(A => A.user_id === (e == null ? void 0 : e.id)), Tl = Te && Te.is_alive;
+            // 调试：打印完整的游戏状态数据，查看讨论内容是否存在
+                    console.log('完整游戏状态数据:', L);
+                    console.log('游戏数据:', L.game);
+                    // 检查游戏数据中是否包含讨论内容数组
+                    console.log('游戏数据中的讨论内容数组:', L.game.discussions);
+                    console.log('玩家列表数据:', L.players);
+                    // 详细打印每个玩家的讨论内容
+                    L.players.forEach(p => {
+                        console.log(`玩家 ${p.nickname} (${p.user_id}) 的讨论内容:`, p.discussion_content, '类型:', typeof p.discussion_content);
+                    });
+                    // 检查是否有玩家包含有效的讨论内容（添加类型检查）
+                    const playersWithDiscussion = L.players.filter(p => p.discussion_content && typeof p.discussion_content === 'string' && p.discussion_content.trim() !== '');
+                    console.log('有讨论内容的玩家数量:', playersWithDiscussion.length);
+                    
+                    const { game: et, players: Ye, my_role: Fi } = L, jn = (Ye == null ? void 0 : Ye.filter(A => A.is_alive)) || [], Te = Ye == null ? void 0 : Ye.find(A => A.user_id === (e == null ? void 0 : e.id)), Tl = Te && Te.is_alive;
             return f.jsx("div", {
                 className: "min-h-screen bg-gradient-to-br from-purple-900 via-pink-800 to-red-900 p-4",
                 children: f.jsxs("div", {
@@ -13287,9 +13312,9 @@ function r1() {
                             children: [f.jsxs("div", {
                                 className: "flex-1",
                                 children: [f.jsxs("h2", {
-                                    className: "text-3xl font-bold text-white mb-2",
-                                    children: [et.status === "submitting_xp" && "提交你的XP", et.status === "voting" && "讨论并投票", et.status === "night" && "夜晚降临", et.status === "finished" && "游戏结束"]
-                                }), f.jsxs("p", {
+                            className: "text-3xl font-bold text-white mb-2",
+                            children: [et.status === "submitting_xp" && "提交你的XP", et.status === "discussing" && "讨论阶段", et.status === "voting" && "投票阶段", et.status === "night" && "夜晚降临", et.status === "finished" && "游戏结束"]
+                        }), f.jsxs("p", {
                                     className: "text-pink-200 text-sm",
                                     children: ["第 ", et.current_round || 1, " 回合 | 状态: ", et.status, " | 存活玩家: ", jn.length, "名"]
                                 }), Fi === "wolf" && et.status !== "submitting_xp" && f.jsxs("div", {
@@ -13359,6 +13384,70 @@ function r1() {
                                 }) : "提交XP"
                             })]
                         })]
+                    }), et.status === "discussing" && f.jsxs("div", {
+                        className: "bg-black/40 backdrop-blur-lg rounded-3xl p-6 mb-6 border border-pink-500/30",
+                        children: [f.jsxs("div", {
+                            className: "mb-4",
+                            children: [f.jsx("h3", {
+                                className: "text-xl font-bold text-white mb-2",
+                                children: Te && !Te.is_alive ? "观战模式 - 等待其他玩家讨论" : J ? "等待其他玩家讨论" : "参与讨论"
+                            }), Te && Te.is_alive && !J && f.jsx("p", {
+                                className: "text-pink-200 text-sm",
+                                children: "💬 输入你的讨论内容，与其他玩家交流分析"
+                            })]
+                        }), Te && Te.is_alive && !J ? f.jsxs(f.Fragment, {
+                            children: [f.jsx("p", {
+                                className: "text-pink-200 text-sm mb-3",
+                                children: "写下你的分析："
+                            }), f.jsx("textarea", {
+                                value: discussionContent,
+                                onChange: A => setDiscussionContent(A.target.value),
+                                placeholder: "分享你的想法...",
+                                className: "w-full h-24 px-4 py-3 rounded-xl bg-white/10 border border-pink-400/30 text-white placeholder-pink-200/50 focus:outline-none focus:border-pink-400 resize-none"
+                            }), f.jsx("button", {
+                                onClick: () => {
+                                    submitDiscussion(discussionContent);
+                                    // 检查是否所有存活玩家都已提交讨论
+                                    const alivePlayers = L.players.filter(p => p.is_alive);
+                                    const hasSubmittedDiscussion = alivePlayers.every(p => p.discussion_content && typeof p.discussion_content === 'string' && p.discussion_content.trim() !== '');
+                                    if (hasSubmittedDiscussion) {
+                                        // 所有玩家都已提交讨论，可以尝试进入投票阶段
+                                        setTimeout(() => {
+                                            // 模拟一个玩家自动发起投票，触发阶段转换
+                                            if (e.id === alivePlayers[0].user_id) {
+                                                try {
+                                                    N('/game/vote', 'POST', {
+                                                        game_id: a,
+                                                        target_id: alivePlayers.find(p => p.user_id !== e.id)?.user_id || alivePlayers[0].user_id
+                                                    });
+                                                } catch (error) {
+                                                    console.log('自动触发投票阶段失败:', error);
+                                                }
+                                            }
+                                        }, 3000);
+                                    }
+                                },
+                                disabled: Q,
+                                className: "w-full mt-4 py-3 rounded-xl bg-gradient-to-r from-pink-500 to-purple-500 text-white font-bold hover:from-pink-600 hover:to-purple-600 transition-all transform hover:scale-105 disabled:opacity-50",
+                                children: Q ? f.jsx(At, {
+                                    className: "w-5 h-5 mx-auto animate-spin"
+                                }) : "提交讨论"
+                            })]
+                        }) : Te && Te.is_alive && J ? f.jsxs("div", {
+                            className: "space-y-4",
+                            children: [f.jsxs("div", {
+                                className: "text-center py-4 bg-green-500/10 rounded-xl border border-green-400/30",
+                                children: [f.jsx(sv, {
+                                    className: "w-12 h-12 text-green-400 mx-auto mb-2"
+                                }), f.jsx("p", {
+                                    className: "text-white text-lg mb-1",
+                                    children: "你已完成讨论"
+                                }), f.jsx("p", {
+                                    className: "text-pink-200 text-sm",
+                                    children: "等待其他玩家完成讨论..."
+                                })]
+                            })]
+                        }) : null]
                     }), et.status === "voting" && f.jsxs("div", {
                         className: "bg-black/40 backdrop-blur-lg rounded-3xl p-6 mb-6 border border-pink-500/30",
                         children: [f.jsxs("div", {
@@ -13584,6 +13673,11 @@ function r1() {
                                             children: [f.jsx("p", {
                                                 className: "text-white font-medium",
                                                 children: A.nickname
+                                            }), (et.status === "voting" || et.status === "discussing" || et.status === "night" || et.status === "finished") && f.jsxs("p", {
+                                                className: "text-white text-sm mt-1",
+                                                children: A.discussion_content !== undefined ? 
+                                                    (typeof A.discussion_content === 'string' && A.discussion_content.trim() ? A.discussion_content : "(空内容)") : 
+                                                    (et.status === "voting" || et.status === "night" || et.status === "finished") ? "未提交讨论" : "" 
                                             }), !A.is_alive && A.xp_content && (A.death_reason === "killed" || A.death_reason === "voted") && f.jsxs("p", {
                                                 className: "text-pink-200 text-sm mt-1",
                                                 children: ["XP: ", A.xp_content]

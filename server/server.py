@@ -156,6 +156,17 @@ def init_database():
                 FOREIGN KEY (game_id) REFERENCES games (id),
                 FOREIGN KEY (voter_id) REFERENCES users (id),
                 FOREIGN KEY (target_id) REFERENCES users (id)
+            )""",
+            
+            """CREATE TABLE discussions (
+                id TEXT PRIMARY KEY,
+                game_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                round INTEGER NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (game_id) REFERENCES games (id),
+                FOREIGN KEY (user_id) REFERENCES users (id)
             )"""
         ]
         
@@ -167,14 +178,34 @@ def init_database():
     else:
         print("数据库文件已存在，检查是否需要迁移")
         # 检查是否需要添加death_reason字段
-        cursor = conn.cursor()
-        try:
-            cursor.execute("SELECT death_reason FROM game_players LIMIT 1")
-        except sqlite3.OperationalError:
-            print("添加death_reason字段到game_players表")
-            cursor.execute("ALTER TABLE game_players ADD COLUMN death_reason TEXT")
-            conn.commit()
-            print("death_reason字段添加完成")
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT death_reason FROM game_players LIMIT 1")
+    except sqlite3.OperationalError:
+        print("添加death_reason字段到game_players表")
+        cursor.execute("ALTER TABLE game_players ADD COLUMN death_reason TEXT")
+        conn.commit()
+        print("death_reason字段添加完成")
+    
+    # 检查是否需要添加discussions表
+    try:
+        cursor.execute("SELECT id FROM discussions LIMIT 1")
+    except sqlite3.OperationalError:
+        print("创建discussions表")
+        cursor.execute("""
+            CREATE TABLE discussions (
+                id TEXT PRIMARY KEY,
+                game_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                round INTEGER NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (game_id) REFERENCES games (id),
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        """)
+        conn.commit()
+        print("discussions表创建完成")
     
     print("数据库初始化完成")
     return conn
@@ -392,6 +423,10 @@ class GameVote(BaseModel):
 
 class GameExit(BaseModel):
     game_id: str
+
+class DiscussionSubmit(BaseModel):
+    game_id: str
+    content: str
 
 # 工具函数
 def generate_room_code() -> str:
@@ -1003,6 +1038,43 @@ async def get_game_state(game_id: str, current_user: Dict = Depends(verify_token
     """, (game_id, game[3]))  # round字段
     votes = cursor.fetchall()
     
+    # 获取当前轮次的讨论
+    print(f"获取游戏 {game_id} 第 {game[3]} 轮的讨论内容")
+    cursor.execute("""
+        SELECT d.*, u.username
+        FROM discussions d
+        JOIN users u ON d.user_id = u.id
+        WHERE d.game_id = ? AND d.round = ?
+        ORDER BY d.created_at ASC
+    """, (game_id, game[3]))
+    discussions = cursor.fetchall()
+    
+    print(f"查找到的讨论记录数量: {len(discussions)}")
+    
+    # 转换讨论数据，注意字段位置：content在索引4位置，round在索引3位置
+    discussions_data = [
+        {
+            "id": d[0],
+            "game_id": d[1],
+            "user_id": d[2],
+            "content": str(d[4]),  # 实际内容在索引4位置
+            "round": game[3],
+            "created_at": d[5],
+            "username": d[6]
+        }
+        for d in discussions
+    ]
+    
+    print(f"转换后的讨论数据: {discussions_data}")
+    
+    # 创建讨论内容映射，直接关联玩家ID和讨论内容
+    discussion_map = {}
+    for d in discussions_data:
+        # 直接使用最新的讨论内容，简单明了
+        discussion_map[d["user_id"]] = d["content"]
+    
+    print(f"讨论内容映射: {discussion_map}")
+    
     # 转换游戏数据
     game_data = {
         "id": game[0],
@@ -1011,7 +1083,8 @@ async def get_game_state(game_id: str, current_user: Dict = Depends(verify_token
         "round": game[3],
         "public_xp": game[4],
         "winner": game[5],
-        "created_at": game[6]
+        "created_at": game[6],
+        "discussions": discussions_data
     }
     
     # 转换玩家数据
@@ -1057,7 +1130,8 @@ async def get_game_state(game_id: str, current_user: Dict = Depends(verify_token
             "xp_status": xp_status,  # XP提交状态
             "vote_status": vote_status,  # 投票状态
             "voted_target": voted_target,  # 投票目标ID
-            "voted_target_name": voted_target_name  # 投票目标名称
+            "voted_target_name": voted_target_name,  # 投票目标名称
+            "discussion_content": discussion_map.get(player[2], "")  # 玩家的讨论内容
         }
         players_data.append(player_data)
         
@@ -1086,6 +1160,127 @@ async def get_game_state(game_id: str, current_user: Dict = Depends(verify_token
         "my_role": my_role,
         "votes": votes_data
     }
+
+@app.post("/api/game/submit-discussion")
+async def submit_discussion(discussion_data: DiscussionSubmit, current_user: Dict = Depends(verify_token)):
+    """提交讨论内容"""
+    if not discussion_data.content:
+        raise HTTPException(status_code=400, detail="讨论内容不能为空")
+    
+    cursor = db.cursor()
+    
+    # 检查游戏状态
+    cursor.execute(
+        "SELECT * FROM games WHERE id = ? AND (status = 'discussing' OR status = 'voting')",
+        (discussion_data.game_id,)
+    )
+    game = cursor.fetchone()
+    if not game:
+        raise HTTPException(status_code=400, detail="当前不是讨论时间")
+    
+    # 检查玩家是否在游戏中且存活
+    cursor.execute("SELECT * FROM game_players WHERE game_id = ? AND user_id = ? AND is_alive = 1", 
+                   (discussion_data.game_id, current_user["id"]))
+    player = cursor.fetchone()
+    if not player:
+        raise HTTPException(status_code=400, detail="您不在游戏中或已死亡")
+    
+    try:
+        # 记录讨论内容
+        discussion_id = str(uuid.uuid4())
+        print(f"存储讨论内容: game_id={discussion_data.game_id}, user_id={current_user['id']}, content={discussion_data.content}, round={game[3]}")
+        # 确保讨论内容以字符串形式存储
+        content_str = str(discussion_data.content)
+        cursor.execute(
+            "INSERT INTO discussions (id, game_id, user_id, content, round) VALUES (?, ?, ?, ?, ?)",
+            (discussion_id, discussion_data.game_id, current_user["id"], content_str, game[3])
+        )
+        
+        db.commit()
+        
+        # 验证数据是否正确存储
+        cursor.execute("SELECT * FROM discussions WHERE id = ?", (discussion_id,))
+        saved_discussion = cursor.fetchone()
+        print(f"验证存储结果: {saved_discussion}")
+        
+        # 检查是否所有存活玩家都已提交讨论内容
+        cursor.execute("SELECT COUNT(*) FROM game_players WHERE game_id = ? AND is_alive = 1", (discussion_data.game_id,))
+        alive_count = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(DISTINCT user_id) FROM discussions WHERE game_id = ? AND round = ?", 
+                       (discussion_data.game_id, game[3]))
+        discussed_count = cursor.fetchone()[0]
+        
+        print(f"存活玩家数: {alive_count}, 已提交讨论玩家数: {discussed_count}")
+        
+        # 如果所有存活玩家都已提交讨论内容，自动进入投票阶段
+        if alive_count > 0 and discussed_count >= alive_count:
+            cursor.execute("UPDATE games SET status = 'voting' WHERE id = ?", (discussion_data.game_id,))
+            db.commit()
+            print(f"所有玩家已完成讨论，游戏 {discussion_data.game_id} 自动进入投票阶段")
+            
+            # 通知游戏状态更新
+            await notify_game_update(discussion_data.game_id, 'phase_changed', {
+                'status': 'voting',
+                'reason': 'all_discussions_submitted'
+            })
+            
+            return {"message": "讨论内容提交成功，所有玩家已完成讨论，游戏进入投票阶段"}
+        
+        # 通知游戏状态更新
+        await notify_game_update(discussion_data.game_id, 'discussion_submitted', {
+            'user_id': current_user["id"],
+            'content': discussion_data.content
+        })
+        
+        return {"message": "讨论内容提交成功"}
+    
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="讨论内容提交失败")
+
+@app.get("/api/game/discussions")
+async def get_discussions(game_id: str, current_user: Dict = Depends(verify_token)):
+    """获取游戏讨论内容"""
+    cursor = db.cursor()
+    
+    # 检查游戏是否存在
+    cursor.execute("SELECT * FROM games WHERE id = ?", (game_id,))
+    game = cursor.fetchone()
+    if not game:
+        raise HTTPException(status_code=404, detail="游戏不存在")
+    
+    # 检查玩家是否在游戏中
+    cursor.execute("SELECT * FROM game_players WHERE game_id = ? AND user_id = ?", 
+                   (game_id, current_user["id"]))
+    player = cursor.fetchone()
+    if not player:
+        raise HTTPException(status_code=400, detail="您不在游戏中")
+    
+    # 获取当前轮次的讨论
+    cursor.execute("""
+        SELECT d.*, u.username
+        FROM discussions d
+        JOIN users u ON d.user_id = u.id
+        WHERE d.game_id = ? AND d.round = ?
+        ORDER BY d.created_at ASC
+    """, (game_id, game[3]))
+    discussions = cursor.fetchall()
+    
+    discussions_data = [
+        {
+            "id": d[0],
+            "game_id": d[1],
+            "user_id": d[2],
+            "content": d[3],
+            "round": d[4],
+            "created_at": d[5],
+            "username": d[6]
+        }
+        for d in discussions
+    ]
+    
+    return {"discussions": discussions_data}
 
 @app.post("/api/game/submit-xp")
 async def submit_xp(xp_data: XPSubmit, current_user: Dict = Depends(verify_token)):
@@ -1131,16 +1326,16 @@ async def submit_xp(xp_data: XPSubmit, current_user: Dict = Depends(verify_token
                 
                 print(f"公开狼人XP: 狼人玩家 {selected_wolf[2]} 的XP: '{selected_xp}'")
                 
-                # 更新游戏状态为投票阶段，并设置公开的XP
+                # 更新游戏状态为讨论阶段，并设置公开的XP
                 cursor.execute(
-                    "UPDATE games SET status = 'voting', public_xp = ? WHERE id = ?",
+                    "UPDATE games SET status = 'discussing', public_xp = ? WHERE id = ?",
                     (selected_xp, xp_data.game_id)
                 )
-                message = "XP提交成功，游戏进入投票阶段"
+                message = "XP提交成功，游戏进入讨论阶段"
                 
                 # 通知游戏状态更新
                 await notify_game_update(xp_data.game_id, 'xp_phase_complete', {
-                    'status': 'voting',
+                    'status': 'discussing',
                     'public_xp': selected_xp
                 })
             else:
@@ -1182,8 +1377,20 @@ async def vote_player(vote_data: GameVote, current_user: Dict = Depends(verify_t
     # 检查游戏状态
     cursor.execute("SELECT * FROM games WHERE id = ? AND status = 'voting'", (vote_data.game_id,))
     game = cursor.fetchone()
+    
+    # 如果不是投票阶段，检查是否是讨论阶段
     if not game:
-        raise HTTPException(status_code=400, detail="当前不是投票时间")
+        cursor.execute("SELECT * FROM games WHERE id = ? AND status = 'discussing'", (vote_data.game_id,))
+        discussion_game = cursor.fetchone()
+        if discussion_game:
+            # 如果是讨论阶段，更新为投票阶段
+            cursor.execute("UPDATE games SET status = 'voting' WHERE id = ?", (vote_data.game_id,))
+            db.commit()
+            game = discussion_game
+            game = list(game)
+            game[2] = 'voting'  # 更新游戏状态
+        else:
+            raise HTTPException(status_code=400, detail="当前不是投票时间")
     
     # 检查玩家是否存活
     cursor.execute("SELECT * FROM game_players WHERE game_id = ? AND user_id = ? AND is_alive = 1", 
