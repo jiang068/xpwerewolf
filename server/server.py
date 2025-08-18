@@ -25,15 +25,15 @@ import uvicorn
 import jwt
 from pydantic import BaseModel
 
-# 配置
-PORT = 5050
-JWT_SECRET = 'xpwerewolf_secret_key'
-SECRET_KEY = "your-secret-key-for-jwt"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
-PLAYERS_DIR = "players"
-DATABASE_DIR = "data"
-DATABASE_FILE = "xpwerewolf.db"
+# 导入配置
+from config import (
+    SERVER_CONFIG, SECURITY_CONFIG, DATABASE_CONFIG, DIRECTORY_CONFIG, 
+    GAME_CONFIG, CORS_CONFIG, SOCKETIO_CONFIG,
+    PORT, HOST, JWT_SECRET, SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES,
+    PLAYERS_DIR, DATABASE_DIR, DATABASE_FILE,
+    get_database_dir, get_database_path, get_players_dir, 
+    get_frontend_file_path
+)
 
 # 创建FastAPI应用
 app = FastAPI(title="XP狼人杀服务器")
@@ -41,37 +41,28 @@ app = FastAPI(title="XP狼人杀服务器")
 # CORS设置
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    **CORS_CONFIG
 )
 
 # Socket.IO服务器
-sio = socketio.AsyncServer(
-    cors_allowed_origins="*",  # 允许所有来源
-    async_mode='asgi',
-    logger=True,  # 恢复Socket.IO日志用于调试
-    engineio_logger=True  # 恢复EngineIO日志用于调试
-)
+sio = socketio.AsyncServer(**SOCKETIO_CONFIG)
 socket_app = socketio.ASGIApp(sio, app)
 
 # 数据库初始化
 def ensure_database_dir():
     """确保数据库目录存在"""
-    db_dir = os.path.join(os.path.dirname(__file__), DATABASE_DIR)
+    db_dir = get_database_dir()
     if not os.path.exists(db_dir):
         os.makedirs(db_dir)
     return db_dir
 
-def get_database_path():
+def get_db_path():
     """获取数据库文件路径"""
-    db_dir = ensure_database_dir()
-    return os.path.join(db_dir, DATABASE_FILE)
+    return get_database_path()
 
 def init_database():
     """初始化SQLite文件数据库"""
-    db_path = get_database_path()
+    db_path = get_db_path()
     print(f"数据库路径: {db_path}")
     
     # 检查数据库文件是否已存在
@@ -81,11 +72,12 @@ def init_database():
     cursor = conn.cursor()
     
     # 启用SQLite性能优化
-    cursor.execute("PRAGMA journal_mode=WAL")  # 启用WAL模式，提高并发性能
-    cursor.execute("PRAGMA synchronous=NORMAL")  # 平衡性能和安全性
-    cursor.execute("PRAGMA cache_size=10000")  # 增加缓存大小
-    cursor.execute("PRAGMA temp_store=MEMORY")  # 临时表存储在内存中
-    cursor.execute("PRAGMA mmap_size=268435456")  # 启用内存映射 (256MB)
+    sqlite_settings = DATABASE_CONFIG["SQLITE_SETTINGS"]
+    cursor.execute(f"PRAGMA journal_mode={sqlite_settings['journal_mode']}")
+    cursor.execute(f"PRAGMA synchronous={sqlite_settings['synchronous']}")
+    cursor.execute(f"PRAGMA cache_size={sqlite_settings['cache_size']}")
+    cursor.execute(f"PRAGMA temp_store={sqlite_settings['temp_store']}")
+    cursor.execute(f"PRAGMA mmap_size={sqlite_settings['mmap_size']}")
     
     # 如果数据库文件不存在，创建表
     if not db_exists:
@@ -169,16 +161,17 @@ def init_database():
 
 def get_db_connection():
     """获取数据库连接"""
-    db_path = get_database_path()
+    db_path = get_db_path()
     conn = sqlite3.connect(db_path, check_same_thread=False)
     
     # 启用SQLite性能优化
     cursor = conn.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL")  # 启用WAL模式，提高并发性能
-    cursor.execute("PRAGMA synchronous=NORMAL")  # 平衡性能和安全性
-    cursor.execute("PRAGMA cache_size=10000")  # 增加缓存大小
-    cursor.execute("PRAGMA temp_store=MEMORY")  # 临时表存储在内存中
-    cursor.execute("PRAGMA mmap_size=268435456")  # 启用内存映射 (256MB)
+    sqlite_settings = DATABASE_CONFIG["SQLITE_SETTINGS"]
+    cursor.execute(f"PRAGMA journal_mode={sqlite_settings['journal_mode']}")
+    cursor.execute(f"PRAGMA synchronous={sqlite_settings['synchronous']}")
+    cursor.execute(f"PRAGMA cache_size={sqlite_settings['cache_size']}")
+    cursor.execute(f"PRAGMA temp_store={sqlite_settings['temp_store']}")
+    cursor.execute(f"PRAGMA mmap_size={sqlite_settings['mmap_size']}")
     
     return conn
 
@@ -190,16 +183,16 @@ def close_db_connection():
         print("数据库连接已关闭")
 
 # 玩家数据管理
-PLAYERS_DIR = os.path.join(os.path.dirname(__file__), '..', 'players')
-
 def ensure_players_dir():
     """确保players目录存在"""
-    if not os.path.exists(PLAYERS_DIR):
-        os.makedirs(PLAYERS_DIR)
+    players_dir = get_players_dir()
+    if not os.path.exists(players_dir):
+        os.makedirs(players_dir)
+    return players_dir
 
 def get_player_file_path(username: str) -> str:
     """获取玩家数据文件路径"""
-    return os.path.join(PLAYERS_DIR, f"{username}.json")
+    return os.path.join(get_players_dir(), f"{username}.json")
 
 def load_player(username: str) -> Optional[Dict]:
     """加载玩家数据"""
@@ -219,10 +212,10 @@ def load_all_users_to_database():
     cursor = db.cursor()
     
     try:
-        ensure_players_dir()
+        players_dir = ensure_players_dir()
         loaded_count = 0
         
-        for filename in os.listdir(PLAYERS_DIR):
+        for filename in os.listdir(players_dir):
             if filename.endswith('.json'):
                 username = filename[:-5]  # 移除.json后缀
                 player_data = load_player(username)
@@ -264,7 +257,7 @@ load_all_users_to_database()
 def save_player(username: str, data: Dict) -> bool:
     """保存玩家数据"""
     try:
-        ensure_players_dir()
+        players_dir = ensure_players_dir()
         file_path = get_player_file_path(username)
         
         # 确保数据包含必要字段
@@ -325,9 +318,9 @@ def update_player_stats(username: str, won: bool = False) -> bool:
 def list_players() -> List[Dict]:
     """列出所有玩家"""
     try:
-        ensure_players_dir()
+        players_dir = ensure_players_dir()
         players = []
-        for filename in os.listdir(PLAYERS_DIR):
+        for filename in os.listdir(players_dir):
             if filename.endswith('.json'):
                 username = filename[:-5]  # 移除.json后缀
                 player_data = load_player(username)
@@ -388,20 +381,8 @@ def generate_room_code() -> str:
 
 def generate_xp_content() -> str:
     """生成狼人杀XP内容"""
-    xp_contents = [
-        "今晚月色真美，适合做点什么...",
-        "我有一个秘密，但我不能说...",
-        "村子里最近总是有奇怪的声音...",
-        "我觉得有人在监视我们...",
-        "昨晚我做了一个可怕的梦...",
-        "这个村子隐藏着什么秘密？",
-        "我总觉得有双眼睛在暗中观察...",
-        "夜深人静时，谁还在外面游荡？",
-        "我听说森林里有野兽出没...",
-        "村民们的表情都很奇怪..."
-    ]
     import random
-    return random.choice(xp_contents)
+    return random.choice(GAME_CONFIG["XP_CONTENTS"])
 
 # 健康检查和基础API
 @app.get("/api/health")
@@ -863,8 +844,8 @@ async def start_game(start_data: RoomStart, current_user: Dict = Depends(verify_
     cursor.execute("SELECT * FROM room_members WHERE room_id = ?", (start_data.room_id,))
     members = cursor.fetchall()
     
-    if len(members) < 4:
-        raise HTTPException(status_code=400, detail="至少需要4名玩家")
+    if len(members) < GAME_CONFIG["MIN_PLAYERS"]:
+        raise HTTPException(status_code=400, detail=f"至少需要{GAME_CONFIG['MIN_PLAYERS']}名玩家")
     
     not_ready = [m for m in members if not m[3]]  # is_ready字段
     if not_ready:
@@ -880,7 +861,7 @@ async def start_game(start_data: RoomStart, current_user: Dict = Depends(verify_
         
         # 分配角色 (1/3 狼人, 2/3 村民)
         player_count = len(members)
-        wolf_count = max(1, player_count // 3)
+        wolf_count = max(1, int(player_count * GAME_CONFIG["WOLF_RATIO"]))
         roles = [True] * wolf_count + [False] * (player_count - wolf_count)
         
         # 随机打乱角色
@@ -1382,17 +1363,17 @@ async def notify_game_update(game_id: str, event_type: str = 'game_updated', dat
 @app.get("/")
 async def read_index():
     """返回主页"""
-    return FileResponse(os.path.join(os.path.dirname(__file__), '..', 'index.html'))
+    return FileResponse(get_frontend_file_path('index.html'))
 
 @app.get("/xpwerewolf.js")
 async def get_js():
     """返回JS文件"""
-    return FileResponse(os.path.join(os.path.dirname(__file__), '..', 'xpwerewolf.js'))
+    return FileResponse(get_frontend_file_path('xpwerewolf.js'))
 
 @app.get("/style.css")
 async def get_css():
     """返回CSS文件"""
-    return FileResponse(os.path.join(os.path.dirname(__file__), '..', 'style.css'))
+    return FileResponse(get_frontend_file_path('style.css'))
 
 @app.get("/favicon.ico")
 async def get_favicon():
@@ -1402,12 +1383,12 @@ async def get_favicon():
     return Response(content="", media_type="image/x-icon")
 
 # 挂载静态文件（作为备用）
-app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), '..')), name="static")
+app.mount("/assets", StaticFiles(directory=get_frontend_file_path('')), name="assets")
 
 if __name__ == "__main__":
     print(f"服务器运行在端口 {PORT}")
     print(f"本地访问: http://localhost:{PORT}")
-    print(f"网络访问: http://0.0.0.0:{PORT}")
+    print(f"网络访问: http://{HOST}:{PORT}")
     print("服务器启动中...")
     
     # 优雅关闭处理
@@ -1422,9 +1403,9 @@ if __name__ == "__main__":
     try:
         uvicorn.run(
             socket_app,
-            host="0.0.0.0",
+            host=HOST,
             port=PORT,
-            log_level="info"  # 恢复info级别日志用于调试
+            log_level=SERVER_CONFIG["LOG_LEVEL"]
         )
     except KeyboardInterrupt:
         print("\n服务器关闭中...")
