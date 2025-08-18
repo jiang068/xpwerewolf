@@ -140,6 +140,7 @@ def init_database():
                 is_wolf BOOLEAN NOT NULL,
                 is_alive BOOLEAN DEFAULT TRUE,
                 xp_content TEXT,
+                death_reason TEXT,
                 FOREIGN KEY (game_id) REFERENCES games (id),
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )""",
@@ -164,7 +165,16 @@ def init_database():
         conn.commit()
         print("数据库表创建完成")
     else:
-        print("数据库文件已存在，跳过表创建")
+        print("数据库文件已存在，检查是否需要迁移")
+        # 检查是否需要添加death_reason字段
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT death_reason FROM game_players LIMIT 1")
+        except sqlite3.OperationalError:
+            print("添加death_reason字段到game_players表")
+            cursor.execute("ALTER TABLE game_players ADD COLUMN death_reason TEXT")
+            conn.commit()
+            print("death_reason字段添加完成")
     
     print("数据库初始化完成")
     return conn
@@ -1008,13 +1018,46 @@ async def get_game_state(game_id: str, current_user: Dict = Depends(verify_token
     players_data = []
     my_role = None
     for player in players:
+        # 判断XP提交状态
+        xp_submitted = player[5] is not None and str(player[5]).strip() != ""
+        xp_status = "xp已提交" if xp_submitted else "正在提交xp"
+        
+        # 判断投票状态
+        player_votes = [v for v in votes if v[2] == player[2]]  # voter_id字段
+        has_voted = len(player_votes) > 0
+        vote_status = "已投票" if has_voted else "未投票"
+        
+        # 获取投票目标信息
+        voted_target = None
+        voted_target_name = None
+        if has_voted and player_votes:
+            voted_target = player_votes[0][3]  # target_id字段
+            voted_target_name = player_votes[0][8]  # target_name字段
+        
+        # 判断XP是否应该对所有人可见
+        # 1. 如果是当前用户，显示自己的XP
+        # 2. 如果是被击杀的玩家（death_reason = "killed"），对所有人可见
+        # 3. 如果是被投票出局的玩家（death_reason = "voted"），对所有人可见
+        # 4. 如果是退出的玩家（death_reason = "exited"），不显示XP
+        death_reason = player[6] if len(player) > 6 else None  # death_reason字段
+        should_show_xp = (
+            player[2] == current_user["id"] or  # 自己的XP
+            (death_reason == "killed") or      # 被击杀的玩家XP
+            (death_reason == "voted")          # 被投票出局的玩家XP
+        )
+        
         player_data = {
             "user_id": player[2],  # user_id
-            "username": player[6],  # username from JOIN
-            "nickname": player[6],  # username from JOIN
+            "username": player[7],  # username from JOIN（位置需要调整）
+            "nickname": player[7],  # username from JOIN（位置需要调整）
             "is_wolf": bool(player[3]),  # is_wolf
             "is_alive": bool(player[4]),  # is_alive
-            "xp_content": player[5] if player[2] == current_user["id"] and player[5] else None  # xp_content
+            "xp_content": player[5] if should_show_xp and player[5] else None,  # xp_content
+            "death_reason": death_reason,  # 死亡原因
+            "xp_status": xp_status,  # XP提交状态
+            "vote_status": vote_status,  # 投票状态
+            "voted_target": voted_target,  # 投票目标ID
+            "voted_target_name": voted_target_name  # 投票目标名称
         }
         players_data.append(player_data)
         
@@ -1191,7 +1234,7 @@ async def vote_player(vote_data: GameVote, current_user: Dict = Depends(verify_t
                     # 有明确的被投票最多的玩家，淘汰该玩家
                     eliminated_player_id = top_voted[0][0]
                     
-                    cursor.execute("UPDATE game_players SET is_alive = 0 WHERE game_id = ? AND user_id = ?",
+                    cursor.execute("UPDATE game_players SET is_alive = 0, death_reason = 'voted' WHERE game_id = ? AND user_id = ?",
                                    (vote_data.game_id, eliminated_player_id))
                     
                     # 检查游戏是否结束
@@ -1281,7 +1324,7 @@ async def kill_player(kill_data: GameVote, current_user: Dict = Depends(verify_t
                     # 有明确的击杀目标，击杀该玩家
                     killed_player_id = top_voted[0][0]
                     
-                    cursor.execute("UPDATE game_players SET is_alive = 0 WHERE game_id = ? AND user_id = ?",
+                    cursor.execute("UPDATE game_players SET is_alive = 0, death_reason = 'killed' WHERE game_id = ? AND user_id = ?",
                                    (kill_data.game_id, killed_player_id))
                     
                     # 检查游戏是否结束
@@ -1322,8 +1365,8 @@ async def exit_game(exit_data: GameExit, current_user: Dict = Depends(verify_tok
     cursor = db.cursor()
     
     try:
-        # 将玩家标记为死亡
-        cursor.execute("UPDATE game_players SET is_alive = 0 WHERE game_id = ? AND user_id = ?",
+        # 将玩家标记为死亡（退出）
+        cursor.execute("UPDATE game_players SET is_alive = 0, death_reason = 'exited' WHERE game_id = ? AND user_id = ?",
                        (exit_data.game_id, current_user["id"]))
         
         if cursor.rowcount == 0:

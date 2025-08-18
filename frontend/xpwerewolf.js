@@ -13452,15 +13452,53 @@ function r1() {
                                 }) : le ? "确认投票" : "请先选择一名玩家"
                             })]
                         }) : Te && Te.is_alive && T ? f.jsxs("div", {
-                            className: "text-center py-6",
-                            children: [f.jsx(sv, {
-                                className: "w-16 h-16 text-green-400 mx-auto mb-4"
-                            }), f.jsx("p", {
-                                className: "text-white text-lg mb-2",
-                                children: " 你已完成投票"
-                            }), f.jsx("p", {
-                                className: "text-pink-200 mb-6",
-                                children: "等待其他玩家投票..."
+                            className: "space-y-4",
+                            children: [f.jsxs("div", {
+                                className: "text-center py-4 bg-green-500/10 rounded-xl border border-green-400/30",
+                                children: [f.jsx(sv, {
+                                    className: "w-12 h-12 text-green-400 mx-auto mb-2"
+                                }), f.jsx("p", {
+                                    className: "text-white text-lg mb-1",
+                                    children: "你已完成投票"
+                                }), f.jsx("p", {
+                                    className: "text-pink-200 text-sm",
+                                    children: "等待其他玩家投票..."
+                                })]
+                            }), f.jsxs("div", {
+                                className: "bg-white/5 rounded-xl p-4",
+                                children: [f.jsx("p", {
+                                    className: "text-pink-300 text-sm mb-3",
+                                    children: "当前投票情况："
+                                }), f.jsx("div", {
+                                    className: "grid grid-cols-2 md:grid-cols-3 gap-3",
+                                    children: jn.map(A => {
+                                        var ze, Fe;
+                                        const ae = Me[A.user_id] || 0,
+                                            q = A.user_id === (e == null ? void 0 : e.id);
+                                        return f.jsxs("div", {
+                                            className: `p-3 rounded-xl border transition-all ${q?"bg-blue-500/20 border-blue-400/50":"bg-white/10 border-pink-400/30"}`,
+                                            children: [f.jsxs("div", {
+                                                className: "flex flex-col items-center",
+                                                children: [f.jsx("div", {
+                                                    className: `w-10 h-10 rounded-full flex items-center justify-center mb-2 ${q?"bg-blue-500":"bg-gradient-to-r from-pink-400 to-purple-400"}`,
+                                                    children: f.jsx("span", {
+                                                        className: "text-white font-bold text-sm",
+                                                        children: (Fe = (ze = A.nickname) == null ? void 0 : ze[0]) == null ? void 0 : Fe.toUpperCase()
+                                                    })
+                                                }), f.jsx("p", {
+                                                    className: "text-white font-medium text-xs",
+                                                    children: A.nickname
+                                                }), q && f.jsx("p", {
+                                                    className: "text-blue-300 text-xs mt-1",
+                                                    children: "（你）"
+                                                }), ae > 0 && f.jsxs("p", {
+                                                    className: "text-orange-400 text-xs mt-1 font-bold",
+                                                    children: [ae, " 票"]
+                                                })]
+                                            })]
+                                        }, A.user_id)
+                                    })
+                                })]
                             })]
                         }) : Te && !Te.is_alive ? f.jsx("div", {
                             className: "text-center py-6",
@@ -13546,15 +13584,36 @@ function r1() {
                                             children: [f.jsx("p", {
                                                 className: "text-white font-medium",
                                                 children: A.nickname
-                                            }), !A.is_alive && A.xp_content && f.jsxs("p", {
+                                            }), !A.is_alive && A.xp_content && (A.death_reason === "killed" || A.death_reason === "voted") && f.jsxs("p", {
                                                 className: "text-pink-200 text-sm mt-1",
                                                 children: ["XP: ", A.xp_content]
                                             })]
                                         })]
                                     }), f.jsx("div", {
-                                        children: !A.is_alive && f.jsx("span", {
+                                        children: !A.is_alive ? f.jsx("span", {
                                             className: "text-red-400 text-sm",
                                             children: A.death_reason === "voted" ? "被投票出局" : A.death_reason === "killed" ? "被击杀" : "已退出"
+                                        }) : et.status === "submitting_xp" ? f.jsx("span", {
+                                            className: A.xp_status === "xp已提交" ? "text-green-400 text-sm" : "text-yellow-400 text-sm",
+                                            children: A.xp_status || "正在提交xp"
+                                        }) : et.status === "voting" ? f.jsxs("div", {
+                                            className: "text-right",
+                                            children: [(() => {
+                                                const voteCount = Me[A.user_id] || 0;
+                                                return voteCount > 0 ? f.jsxs("div", {
+                                                    className: "text-orange-400 text-sm font-medium mb-1",
+                                                    children: [`获得 ${voteCount} 票`]
+                                                }) : null;
+                                            })(), f.jsx("span", {
+                                                className: A.vote_status === "已投票" ? "text-green-400 text-sm" : "text-yellow-400 text-sm",
+                                                children: A.vote_status || "未投票"
+                                            }), A.voted_target_name && f.jsx("div", {
+                                                className: "text-gray-300 text-xs mt-1",
+                                                children: `→ ${A.voted_target_name}`
+                                            })]
+                                        }) : f.jsx("span", {
+                                            className: "text-gray-400 text-sm",
+                                            children: "存活"
                                         })
                                     })]
                                 }, A.user_id)
