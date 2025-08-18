@@ -1,0 +1,19 @@
+第一次需要创建虚拟空间：
+
+python -m venv xpvenv
+
+xpvenv\Scripts\activate
+
+
+安装模块：
+
+$env:HTTP_PROXY="http://127.0.0.1:7890"; $env:HTTPS_PROXY="http://127.0.0.1:7890"; 
+
+pip install -r requirements.txt
+
+
+
+以后就只需要进入虚拟空间就行：
+
+xpvenv\Scripts\activate
+
