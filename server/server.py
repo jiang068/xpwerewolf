@@ -11,6 +11,8 @@ import uuid
 import bcrypt
 import sqlite3
 import asyncio
+import signal
+import sys
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any
 import socketio
@@ -30,6 +32,8 @@ SECRET_KEY = "your-secret-key-for-jwt"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 PLAYERS_DIR = "players"
+DATABASE_DIR = "data"
+DATABASE_FILE = "xpwerewolf.db"
 
 # 创建FastAPI应用
 app = FastAPI(title="XP狼人杀服务器")
@@ -53,83 +57,137 @@ sio = socketio.AsyncServer(
 socket_app = socketio.ASGIApp(sio, app)
 
 # 数据库初始化
+def ensure_database_dir():
+    """确保数据库目录存在"""
+    db_dir = os.path.join(os.path.dirname(__file__), DATABASE_DIR)
+    if not os.path.exists(db_dir):
+        os.makedirs(db_dir)
+    return db_dir
+
+def get_database_path():
+    """获取数据库文件路径"""
+    db_dir = ensure_database_dir()
+    return os.path.join(db_dir, DATABASE_FILE)
+
 def init_database():
-    """初始化内存SQLite数据库"""
-    conn = sqlite3.connect(':memory:', check_same_thread=False)
+    """初始化SQLite文件数据库"""
+    db_path = get_database_path()
+    print(f"数据库路径: {db_path}")
+    
+    # 检查数据库文件是否已存在
+    db_exists = os.path.exists(db_path)
+    
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     cursor = conn.cursor()
     
-    # 创建表
-    tables = [
-        """CREATE TABLE users (
-            id TEXT PRIMARY KEY,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )""",
-        
-        """CREATE TABLE rooms (
-            id TEXT PRIMARY KEY,
-            code TEXT UNIQUE NOT NULL,
-            name TEXT NOT NULL,
-            owner_id TEXT NOT NULL,
-            status TEXT DEFAULT 'waiting',
-            max_players INTEGER DEFAULT 8,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (owner_id) REFERENCES users (id)
-        )""",
-        
-        """CREATE TABLE room_members (
-            id TEXT PRIMARY KEY,
-            room_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            is_ready BOOLEAN DEFAULT FALSE,
-            joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (room_id) REFERENCES rooms (id),
-            FOREIGN KEY (user_id) REFERENCES users (id)
-        )""",
-        
-        """CREATE TABLE games (
-            id TEXT PRIMARY KEY,
-            room_id TEXT NOT NULL,
-            status TEXT DEFAULT 'submitting_xp',
-            round INTEGER DEFAULT 1,
-            public_xp TEXT,
-            winner TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (room_id) REFERENCES rooms (id)
-        )""",
-        
-        """CREATE TABLE game_players (
-            id TEXT PRIMARY KEY,
-            game_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            is_wolf BOOLEAN NOT NULL,
-            is_alive BOOLEAN DEFAULT TRUE,
-            xp_content TEXT,
-            FOREIGN KEY (game_id) REFERENCES games (id),
-            FOREIGN KEY (user_id) REFERENCES users (id)
-        )""",
-        
-        """CREATE TABLE votes (
-            id TEXT PRIMARY KEY,
-            game_id TEXT NOT NULL,
-            voter_id TEXT NOT NULL,
-            target_id TEXT NOT NULL,
-            round INTEGER NOT NULL,
-            vote_type TEXT DEFAULT 'day',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (game_id) REFERENCES games (id),
-            FOREIGN KEY (voter_id) REFERENCES users (id),
-            FOREIGN KEY (target_id) REFERENCES users (id)
-        )"""
-    ]
+    # 启用SQLite性能优化
+    cursor.execute("PRAGMA journal_mode=WAL")  # 启用WAL模式，提高并发性能
+    cursor.execute("PRAGMA synchronous=NORMAL")  # 平衡性能和安全性
+    cursor.execute("PRAGMA cache_size=10000")  # 增加缓存大小
+    cursor.execute("PRAGMA temp_store=MEMORY")  # 临时表存储在内存中
+    cursor.execute("PRAGMA mmap_size=268435456")  # 启用内存映射 (256MB)
     
-    for table_sql in tables:
-        cursor.execute(table_sql)
+    # 如果数据库文件不存在，创建表
+    if not db_exists:
+        print("创建数据库表...")
+        # 创建表
+        tables = [
+            """CREATE TABLE users (
+                id TEXT PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )""",
+            
+            """CREATE TABLE rooms (
+                id TEXT PRIMARY KEY,
+                code TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
+                owner_id TEXT NOT NULL,
+                status TEXT DEFAULT 'waiting',
+                max_players INTEGER DEFAULT 8,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (owner_id) REFERENCES users (id)
+            )""",
+            
+            """CREATE TABLE room_members (
+                id TEXT PRIMARY KEY,
+                room_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                is_ready BOOLEAN DEFAULT FALSE,
+                joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (room_id) REFERENCES rooms (id),
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )""",
+            
+            """CREATE TABLE games (
+                id TEXT PRIMARY KEY,
+                room_id TEXT NOT NULL,
+                status TEXT DEFAULT 'submitting_xp',
+                round INTEGER DEFAULT 1,
+                public_xp TEXT,
+                winner TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (room_id) REFERENCES rooms (id)
+            )""",
+            
+            """CREATE TABLE game_players (
+                id TEXT PRIMARY KEY,
+                game_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                is_wolf BOOLEAN NOT NULL,
+                is_alive BOOLEAN DEFAULT TRUE,
+                xp_content TEXT,
+                FOREIGN KEY (game_id) REFERENCES games (id),
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )""",
+            
+            """CREATE TABLE votes (
+                id TEXT PRIMARY KEY,
+                game_id TEXT NOT NULL,
+                voter_id TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                round INTEGER NOT NULL,
+                vote_type TEXT DEFAULT 'day',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (game_id) REFERENCES games (id),
+                FOREIGN KEY (voter_id) REFERENCES users (id),
+                FOREIGN KEY (target_id) REFERENCES users (id)
+            )"""
+        ]
+        
+        for table_sql in tables:
+            cursor.execute(table_sql)
+        
+        conn.commit()
+        print("数据库表创建完成")
+    else:
+        print("数据库文件已存在，跳过表创建")
     
-    conn.commit()
     print("数据库初始化完成")
     return conn
+
+def get_db_connection():
+    """获取数据库连接"""
+    db_path = get_database_path()
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    
+    # 启用SQLite性能优化
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")  # 启用WAL模式，提高并发性能
+    cursor.execute("PRAGMA synchronous=NORMAL")  # 平衡性能和安全性
+    cursor.execute("PRAGMA cache_size=10000")  # 增加缓存大小
+    cursor.execute("PRAGMA temp_store=MEMORY")  # 临时表存储在内存中
+    cursor.execute("PRAGMA mmap_size=268435456")  # 启用内存映射 (256MB)
+    
+    return conn
+
+def close_db_connection():
+    """关闭数据库连接"""
+    global db
+    if db:
+        db.close()
+        print("数据库连接已关闭")
 
 # 玩家数据管理
 PLAYERS_DIR = os.path.join(os.path.dirname(__file__), '..', 'players')
@@ -1352,9 +1410,24 @@ if __name__ == "__main__":
     print(f"网络访问: http://0.0.0.0:{PORT}")
     print("服务器启动中...")
     
-    uvicorn.run(
-        socket_app,
-        host="0.0.0.0",
-        port=PORT,
-        log_level="info"  # 恢复info级别日志用于调试
-    )
+    # 优雅关闭处理
+    def signal_handler(signum, frame):
+        print("\n正在关闭服务器...")
+        close_db_connection()
+        sys.exit(0)
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    try:
+        uvicorn.run(
+            socket_app,
+            host="0.0.0.0",
+            port=PORT,
+            log_level="info"  # 恢复info级别日志用于调试
+        )
+    except KeyboardInterrupt:
+        print("\n服务器关闭中...")
+        close_db_connection()
+    finally:
+        close_db_connection()

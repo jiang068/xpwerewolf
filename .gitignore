@@ -43,6 +43,10 @@ Thumbs.db
 # Database
 *.db
 *.sqlite3
+server/data/
+*.db-journal
+*.db-wal
+*.db-shm
 
 # Node modules (if any)
 node_modules/
