@@ -46,7 +46,8 @@ DIRECTORY_CONFIG = {
 GAME_CONFIG = {
     "MIN_PLAYERS": 4,
     "DEFAULT_MAX_PLAYERS": 8,
-    "WOLF_RATIO": 1/3,  # 狼人比例
+    "WOLF_SELECTION_MODE": "fixed",  # 狼人选择模式: "fixed" 固定一个狼人, "ratio" 按比例分配
+    "WOLF_RATIO": 1/3,  # 狼人比例(当WOLF_SELECTION_MODE为"ratio"时使用)
     "DEBUG_ROLE_ASSIGNMENT": False,  # 是否显示角色分配调试信息
     "XP_CONTENTS": [
         "今晚月色真美，适合做点什么...",

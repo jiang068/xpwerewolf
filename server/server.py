@@ -257,14 +257,42 @@ def load_player(username: str) -> Optional[Dict]:
         print(f"Error loading player {username}: {e}")
         return None
 
+def clear_rooms_database():
+    """清空数据库中的房间相关信息"""
+    print("开始清空数据库中的房间信息...")
+    cursor = db.cursor()
+    
+    try:
+        # 清空房间相关的表，按依赖顺序进行
+        # 先清空关联表
+        cursor.execute("DELETE FROM discussions")
+        cursor.execute("DELETE FROM votes")
+        cursor.execute("DELETE FROM game_players")
+        cursor.execute("DELETE FROM games")
+        cursor.execute("DELETE FROM room_members")
+        # 最后清空主表
+        cursor.execute("DELETE FROM rooms")
+        
+        db.commit()
+        print("数据库中的房间信息已清空")
+    except Exception as e:
+        print(f"清空房间信息时发生错误: {e}")
+        db.rollback()
+
+
 def load_all_users_to_database():
-    """启动时将所有用户文件加载到数据库中"""
+    """启动时将所有用户文件加载到数据库中，以players目录为准"""
     print("开始加载用户数据到数据库...")
     cursor = db.cursor()
     
     try:
         players_dir = ensure_players_dir()
         loaded_count = 0
+        updated_count = 0
+        
+        # 首先清空数据库中的users表
+        cursor.execute("DELETE FROM users")
+        print("已清空数据库中的用户表")
         
         for filename in os.listdir(players_dir):
             if filename.endswith('.json'):
@@ -272,23 +300,16 @@ def load_all_users_to_database():
                 player_data = load_player(username)
                 
                 if player_data and 'id' in player_data and 'username' in player_data and 'password' in player_data:
-                    # 检查数据库中是否已存在该用户
-                    cursor.execute("SELECT id FROM users WHERE username = ?", (username,))
-                    existing_user = cursor.fetchone()
-                    
-                    if not existing_user:
-                        # 插入用户到数据库
-                        try:
-                            cursor.execute(
-                                "INSERT INTO users (id, username, password) VALUES (?, ?, ?)",
-                                (player_data["id"], player_data["username"], player_data["password"])
-                            )
-                            loaded_count += 1
-                            print(f"已加载用户: {username}")
-                        except Exception as e:
-                            print(f"加载用户 {username} 失败: {e}")
-                    else:
-                        print(f"用户 {username} 已存在于数据库中，跳过")
+                    # 插入用户到数据库
+                    try:
+                        cursor.execute(
+                            "INSERT INTO users (id, username, password) VALUES (?, ?, ?)",
+                            (player_data["id"], player_data["username"], player_data["password"])
+                        )
+                        loaded_count += 1
+                        print(f"已加载用户: {username}")
+                    except Exception as e:
+                        print(f"加载用户 {username} 失败: {e}")
                 else:
                     print(f"用户文件 {filename} 数据不完整，跳过")
         
@@ -302,7 +323,11 @@ def load_all_users_to_database():
 # 全局数据库连接
 db = init_database()
 
-# 启动时加载所有用户数据
+# 启动时初始化数据
+print("服务器启动初始化数据...")
+# 1. 清空数据库中的房间信息
+clear_rooms_database()
+# 2. 以players目录为准更新数据库中的用户信息
 load_all_users_to_database()
 
 def save_player(username: str, data: Dict) -> bool:
@@ -442,10 +467,16 @@ def shuffle_roles(player_count: int) -> List[bool]:
     改进的角色分配函数，确保真正的随机性
     返回角色列表，True表示狼人，False表示村民
     """
-    wolf_count = max(1, int(player_count * GAME_CONFIG["WOLF_RATIO"]))
+    # 根据配置确定狼人数
+    if GAME_CONFIG.get("WOLF_SELECTION_MODE") == "fixed":
+        wolf_count = 1  # 固定一个狼人
+    else:
+        wolf_count = max(1, int(player_count * GAME_CONFIG["WOLF_RATIO"]))  # 按比例分配
     
     if GAME_CONFIG.get("DEBUG_ROLE_ASSIGNMENT", False):
+        selection_mode = "固定1个狼人" if GAME_CONFIG.get("WOLF_SELECTION_MODE") == "fixed" else f"按比例({GAME_CONFIG['WOLF_RATIO']})"
         print(f"玩家总数: {player_count}, 狼人数: {wolf_count}, 村民数: {player_count - wolf_count}")
+        print(f"狼人选择模式: {selection_mode}")
     
     # 创建角色列表
     roles = [True] * wolf_count + [False] * (player_count - wolf_count)
@@ -755,18 +786,37 @@ async def join_room(code: str, current_user: Dict = Depends(verify_token)):
     """加入房间"""
     cursor = db.cursor()
     
-    # 检查房间是否存在
-    cursor.execute("SELECT * FROM rooms WHERE code = ? AND status = 'waiting'", (code,))
+    # 检查房间是否存在（不限制状态）
+    cursor.execute("SELECT * FROM rooms WHERE code = ?", (code,))
     room = cursor.fetchone()
     if not room:
-        raise HTTPException(status_code=404, detail="房间不存在或已开始游戏")
+        raise HTTPException(status_code=404, detail="房间不存在")
     
     room_id = room[0]
     
     # 检查是否已在房间中
     cursor.execute("SELECT * FROM room_members WHERE room_id = ? AND user_id = ?", (room_id, current_user["id"]))
-    if cursor.fetchone():
-        raise HTTPException(status_code=400, detail="您已在房间中")
+    is_member = cursor.fetchone() is not None
+    
+    # 如果不是房间成员且房间已开始游戏，则拒绝加入
+    if not is_member and room[4] != 'waiting':
+        raise HTTPException(status_code=400, detail="游戏已开始，无法加入新玩家")
+    
+    # 如果是房间成员但房间已开始游戏，允许重新加入
+    if is_member and room[4] != 'waiting':
+        # 检查是否有正在进行的游戏
+        cursor.execute("SELECT * FROM games WHERE room_id = ? AND status != 'finished'", (room_id,))
+        game = cursor.fetchone()
+        if game:
+            # 通知游戏更新
+            await notify_game_update(game[0], 'player_rejoined', current_user["id"])
+            return {"message": "成功重新加入游戏", "game_id": game[0]}
+        else:
+            return {"message": "成功重新加入房间"}
+    
+    # 如果已在房间中且游戏未开始，直接返回成功
+    if is_member:
+        return {"message": "您已在房间中"}
     
     # 检查房间人数
     cursor.execute("SELECT COUNT(*) FROM room_members WHERE room_id = ?", (room_id,))
@@ -1058,7 +1108,7 @@ async def get_game_state(game_id: str, current_user: Dict = Depends(verify_token
             "game_id": d[1],
             "user_id": d[2],
             "content": str(d[4]),  # 实际内容在索引4位置
-            "round": game[3],
+            "round": d[3],  # 使用讨论记录本身的round值，而不是当前游戏轮次
             "created_at": d[5],
             "username": d[6]
         }
@@ -1481,12 +1531,19 @@ async def kill_player(kill_data: GameVote, current_user: Dict = Depends(verify_t
     if not game:
         raise HTTPException(status_code=400, detail="当前不是夜晚时间")
     
-    # 检查玩家是否是狼人
+    # 检查玩家是否是狼人且存活
     cursor.execute("SELECT * FROM game_players WHERE game_id = ? AND user_id = ? AND is_wolf = 1 AND is_alive = 1",
                    (kill_data.game_id, current_user["id"]))
     player = cursor.fetchone()
     if not player:
         raise HTTPException(status_code=400, detail="您不是狼人或已死亡")
+    
+    # 检查目标是否是狼人（狼人不能杀狼人）
+    cursor.execute("SELECT is_wolf FROM game_players WHERE game_id = ? AND user_id = ?",
+                   (kill_data.game_id, kill_data.target_id))
+    target_player = cursor.fetchone()
+    if target_player and target_player[0]:  # 如果目标是狼人
+        raise HTTPException(status_code=400, detail="狼人不能杀害自己的同伴")
     
     # 检查是否已投票
     cursor.execute("SELECT * FROM votes WHERE game_id = ? AND voter_id = ? AND round = ? AND vote_type = 'night'",
@@ -1540,15 +1597,23 @@ async def kill_player(kill_data: GameVote, current_user: Dict = Depends(verify_t
                         db.commit()
                         return {"message": message}
                     
-                    # 游戏继续，进入下一轮XP提交阶段
-                    cursor.execute("UPDATE games SET status = 'submitting_xp', round = round + 1 WHERE id = ?",
+                    # 游戏继续，进入下一轮讨论阶段
+                    # 增加轮次但保留当前XP内容，以便第二轮可以直接开始讨论
+                    cursor.execute("UPDATE games SET status = 'discussing', round = round + 1 WHERE id = ?",
                                    (kill_data.game_id,))
                     
-                    # 清空所有玩家的XP内容，准备下一轮
-                    cursor.execute("UPDATE game_players SET xp_content = NULL WHERE game_id = ?",
-                                   (kill_data.game_id,))
+                    # 重新获取最新轮次
+                    cursor.execute("SELECT round FROM games WHERE id = ?", (kill_data.game_id,))
+                    new_round = cursor.fetchone()[0]
+
+                    # 通知游戏状态更新
+                    await notify_game_update(kill_data.game_id, 'phase_changed', {
+                        'status': 'discussing',
+                        'reason': 'night_kill_complete',
+                        'round': game[3] + 1
+                    })
                     
-                    message = "击杀成功，进入新一轮"
+                    message = "击杀成功，进入第二轮讨论阶段"
                 else:
                     # 击杀投票平局，重新投票
                     cursor.execute("DELETE FROM votes WHERE game_id = ? AND round = ? AND vote_type = 'night'",
@@ -1617,7 +1682,7 @@ async def check_game_end(cursor, game_id: str, current_username: str) -> Optiona
         
         # 更新所有玩家的统计数据
         cursor.execute("""
-            SELECT gp.*, u.username 
+            SELECT u.username, gp.* 
             FROM game_players gp 
             JOIN users u ON gp.user_id = u.id 
             WHERE gp.game_id = ?
@@ -1625,9 +1690,10 @@ async def check_game_end(cursor, game_id: str, current_username: str) -> Optiona
         game_players = cursor.fetchall()
         
         print(f"游戏结束，胜者: {winner}")
+        stats_updated = []
         for player in game_players:
-            username = player[6]  # username from JOIN
-            is_wolf = bool(player[3])  # is_wolf (转换为布尔值)
+            username = player[0]  # username from JOIN (now first column)
+            is_wolf = bool(player[4])  # is_wolf (现在索引+1，因为username在第一列)
             # 修正胜负判定逻辑
             if winner == "wolves":
                 is_winner = is_wolf  # 狼人胜利时，狼人获胜
@@ -1635,7 +1701,19 @@ async def check_game_end(cursor, game_id: str, current_username: str) -> Optiona
                 is_winner = not is_wolf  # 村民胜利时，村民获胜
                 
             print(f"更新玩家 {username} 统计: is_wolf={is_wolf}, is_winner={is_winner}")
-            update_player_stats(username, is_winner)
+            # 确保update_player_stats函数正确执行
+            result = update_player_stats(username, is_winner)
+            if result:
+                stats_updated.append(username)
+                print(f"玩家 {username} 统计更新成功")
+            else:
+                print(f"玩家 {username} 统计更新失败")
+        
+        # 通知游戏结束，包含更新后的统计数据
+        await notify_game_update(game_id, 'game_over', {
+            'winner': winner,
+            'stats_updated': stats_updated
+        })
         
         if winner == "villagers":
             return "游戏结束，村民胜利"

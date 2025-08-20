@@ -12719,7 +12719,41 @@ const t1 = `${baseUrl}/api`,
     n1 = baseUrl;
 
 function r1() {
-    const [e, t] = x.useState(null), [n, r] = x.useState(localStorage.getItem("token")), [i, o] = x.useState("login"), [l, s] = x.useState(null), [a, u] = x.useState(null), [h, m] = x.useState(null), [p, w] = x.useState(null), [S, E] = x.useState(null), N = async (L, Y = "GET", H = null) => {
+    // 从URL参数或localStorage中恢复房间代码
+const getInitialRoomCode = () => {
+    // 1. 优先从URL参数中获取
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomCodeFromUrl = urlParams.get('room');
+    if (roomCodeFromUrl) {
+        return roomCodeFromUrl;
+    }
+    
+    // 2. 其次从localStorage中获取
+    return localStorage.getItem('room_code') || null;
+};
+
+// 从URL参数或localStorage中恢复初始页面状态
+const getInitialPage = () => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomCode = urlParams.get('room');
+    // 如果URL中有房间代码参数，直接进入房间页面
+    if (roomCode) {
+        return 'room';
+    }
+    
+    // 否则检查是否有token，决定是显示登录页还是大厅
+    return localStorage.getItem('token') ? 'lobby' : 'login';
+};
+
+const [e, t] = x.useState(null), 
+      [n, r] = x.useState(localStorage.getItem("token")), 
+      [i, o] = x.useState(getInitialPage()), 
+      [l, s] = x.useState(getInitialRoomCode()), 
+      [a, u] = x.useState(null), 
+      [h, m] = x.useState(null), 
+      [p, w] = x.useState(null), 
+      [S, E] = x.useState(null), 
+      N = async (L, Y = "GET", H = null) => {
         const ee = {
             method: Y,
             headers: {
@@ -12745,7 +12779,12 @@ function r1() {
     };
     x.useEffect(() => {
         n && N("/user/profile").then(L => {
-            t(L), o("lobby")
+            t(L);
+            // 只有在没有恢复房间代码时才默认跳转到大厅
+            // 这样从URL或localStorage恢复房间信息时，就不会被覆盖
+            if (!l) {
+                o("lobby");
+            }
         }).catch(() => {
             localStorage.removeItem("token"), r(null)
         })
@@ -12842,7 +12881,12 @@ function r1() {
                 ee(!0);
                 try {
                     const T = await N("/room/create", "POST");
-                    s(T.room_code), o("room")
+                    // 保存房间代码到状态和localStorage
+s(T.room_code);
+localStorage.setItem('room_code', T.room_code);
+// 导航到房间页面，并更新URL参数
+window.history.replaceState({}, '', `?room=${T.room_code}`);
+o("room")
                 } catch (T) {
                     c("error", "错误", T.message)
                 } finally {
@@ -12855,7 +12899,12 @@ function r1() {
                 }
                 ee(!0);
                 try {
-                    await N(`/room/join/${L}`, "POST"), s(L), o("room")
+                    await N(`/room/join/${L}`, "POST"), // 保存房间代码到状态和localStorage
+s(L);
+localStorage.setItem('room_code', L);
+// 导航到房间页面，并更新URL参数
+window.history.replaceState({}, '', `?room=${L}`);
+o("room")
                 } catch (T) {
                     c("error", "错误", T.message)
                 } finally {
@@ -12899,7 +12948,15 @@ function r1() {
                                 })]
                             }), f.jsx("button", {
                                 onClick: () => {
-                                    localStorage.removeItem("token"), r(null), t(null), o("login")
+                                    // 清除所有用户数据和房间信息
+localStorage.removeItem("token");
+localStorage.removeItem('room_code');
+r(null);
+t(null);
+s(null);
+// 导航到登录页，并清除URL参数
+window.history.replaceState({}, '', '/');
+o("login")
                                 },
                                 className: "p-3 rounded-xl bg-red-500/20 hover:bg-red-500/30 text-red-300 transition-all",
                                 children: f.jsx(us, {
@@ -13036,7 +13093,15 @@ function r1() {
                 try {
                     await N("/room/leave", "POST", {
                         room_id: L.id
-                    }), s(null), o("lobby")
+                    });
+                    // 清除房间代码状态
+                    s(null);
+                    // 清除localStorage中的房间代码
+                    localStorage.removeItem('room_code');
+                    // 清除URL中的房间参数
+                    window.history.replaceState({}, '', '/');
+                    // 导航到大厅页面
+                    o("lobby")
                 } catch (J) {
                     c("error", "错误", J.message)
                 }
@@ -13161,6 +13226,16 @@ function r1() {
                                     isWolf: !!(Fe != null && Fe.is_wolf)
                                 })
                             }
+                            // 游戏结束后刷新用户资料，更新胜场和总局数统计
+                            setTimeout(() => {
+                                if (n) {
+                                    N("/user/profile").then(L => {
+                                        t(L);
+                                    }).catch(() => {
+                                        console.log("刷新用户资料失败");
+                                    });
+                                }
+                            }, 1000);
                         })
                     }), A.on("vote_tie", q => {
                         Le(q.message), c("info", "投票平局", q.message), setTimeout(() => Le(null), 3e3)
@@ -13175,7 +13250,7 @@ function r1() {
                         q.killed_nickname && q.killed_xp && E({
                             nickname: q.killed_nickname,
                             xp: q.killed_xp
-                        }), I(!1), Se(null), ht({}), Le(null), c("info", "新回合开始", "")
+                        }), I(!1), Se(null), ht({}), Le(null), ce(false), setDiscussionContent(""), c("info", "新回合开始", "")
                     }), A.on("discussion_submitted", q => {
                         // 当收到讨论提交事件时，立即刷新游戏状态
                         St();
@@ -13190,8 +13265,28 @@ function r1() {
                 var A;
                 if (a) try {
                     const ae = await N(`/game/state?game_id=${a}`);
-                    Y(ae);
                     const q = (A = ae.players) == null ? void 0 : A.find(Ce => Ce.user_id === (e == null ? void 0 : e.id));
+                    
+                    // 先检查是否需要重置讨论提交状态
+                    if (ae.game.status === "discussing") {
+                        // 检查当前玩家是否真的已经提交了讨论（从服务器状态判断）
+                        const hasSubmitted = q && q.discussion_content && q.discussion_content.trim() !== '';
+                        
+                        // 只有当状态不一致时才更新，以避免不必要的重新渲染
+                        if (J !== hasSubmitted) {
+                            ce(hasSubmitted);
+                        }
+                        
+                        // 如果玩家未提交讨论，则清空讨论内容
+                        if (!hasSubmitted && discussionContent) {
+                            setDiscussionContent("");
+                        }
+                    }
+                    
+                    // 然后再更新游戏状态
+                    Y(ae);
+                    
+                    // 其他状态更新逻辑
                     if (q && q.xp_content && te(!0), ae.game.status === "finished" && (ae.game.winner ? w({
                             winner: ae.game.winner,
                             playerRole: q != null && q.is_wolf ? "wolf" : "villager",
@@ -13204,6 +13299,7 @@ function r1() {
                         const ze = ae.votes.find(Fe => Fe.voter_id === (e == null ? void 0 : e.id));
                         I(!!ze)
                     } else ht({}), I(!1);
+                    
                     return ae
                 } catch {
                     c("error", "错误", "加载游戏状态失败")
@@ -13316,7 +13412,7 @@ function r1() {
                             children: [et.status === "submitting_xp" && "提交你的XP", et.status === "discussing" && "讨论阶段", et.status === "voting" && "投票阶段", et.status === "night" && "夜晚降临", et.status === "finished" && "游戏结束"]
                         }), f.jsxs("p", {
                                     className: "text-pink-200 text-sm",
-                                    children: ["第 ", et.current_round || 1, " 回合 | 状态: ", et.status, " | 存活玩家: ", jn.length, "名"]
+                                    children: ["第 ", et.round || 1, " 回合 | 状态: ", et.status, " | 存活玩家: ", jn.length, "名"]
                                 }), Fi === "wolf" && et.status !== "submitting_xp" && f.jsxs("div", {
                                     className: "inline-flex items-center bg-red-500/20 px-4 py-2 rounded-full mt-2",
                                     children: [f.jsx(lv, {
@@ -13407,25 +13503,9 @@ function r1() {
                             }), f.jsx("button", {
                                 onClick: () => {
                                     submitDiscussion(discussionContent);
-                                    // 检查是否所有存活玩家都已提交讨论
-                                    const alivePlayers = L.players.filter(p => p.is_alive);
-                                    const hasSubmittedDiscussion = alivePlayers.every(p => p.discussion_content && typeof p.discussion_content === 'string' && p.discussion_content.trim() !== '');
-                                    if (hasSubmittedDiscussion) {
-                                        // 所有玩家都已提交讨论，可以尝试进入投票阶段
-                                        setTimeout(() => {
-                                            // 模拟一个玩家自动发起投票，触发阶段转换
-                                            if (e.id === alivePlayers[0].user_id) {
-                                                try {
-                                                    N('/game/vote', 'POST', {
-                                                        game_id: a,
-                                                        target_id: alivePlayers.find(p => p.user_id !== e.id)?.user_id || alivePlayers[0].user_id
-                                                    });
-                                                } catch (error) {
-                                                    console.log('自动触发投票阶段失败:', error);
-                                                }
-                                            }
-                                        }, 3000);
-                                    }
+                                    // 讨论提交后，服务器会自动处理所有玩家是否都已提交讨论的逻辑
+                                    // 服务器端会在所有玩家提交后自动将游戏状态更新为voting
+                                    // 前端只需等待服务器推送状态更新即可
                                 },
                                 disabled: Q,
                                 className: "w-full mt-4 py-3 rounded-xl bg-gradient-to-r from-pink-500 to-purple-500 text-white font-bold hover:from-pink-600 hover:to-purple-600 transition-all transform hover:scale-105 disabled:opacity-50",
@@ -13676,7 +13756,7 @@ function r1() {
                                             }), (et.status === "voting" || et.status === "discussing" || et.status === "night" || et.status === "finished") && f.jsxs("p", {
                                                 className: "text-white text-sm mt-1",
                                                 children: A.discussion_content !== undefined ? 
-                                                    (typeof A.discussion_content === 'string' && A.discussion_content.trim() ? A.discussion_content : "(空内容)") : 
+                                                    (typeof A.discussion_content === 'string' && A.discussion_content.trim() ? A.discussion_content : "未提交讨论") : 
                                                     (et.status === "voting" || et.status === "night" || et.status === "finished") ? "未提交讨论" : "" 
                                             }), !A.is_alive && A.xp_content && (A.death_reason === "killed" || A.death_reason === "voted") && f.jsxs("p", {
                                                 className: "text-pink-200 text-sm mt-1",
@@ -13848,8 +13928,23 @@ function r1() {
                             children: ee ? "恭喜！你成功达成了目标！" : "不要气馁，下次再接再厉！"
                         })]
                     }), f.jsx("button", {
-                        onClick: () => {
-                            w(null), o("lobby"), u(null), s(null)
+                        onClick: async () => {
+                            try {
+                                // 清除localStorage中的room_code
+                                localStorage.removeItem('room_code');
+                                // 清除URL中的房间参数
+                                window.history.replaceState({}, '', '/');
+                                // 清除游戏结果状态，导航回大厅
+                                w(null), o("lobby"), u(null), s(null)
+                                // 通知服务器清理房间状态
+                                await N("/game/exit", "POST", {
+                                    game_id: a
+                                })
+                            } catch (error) {
+                                console.error('返回大厅时出错:', error);
+                                // 即使出错也尝试导航回大厅
+                                w(null), o("lobby"), u(null), s(null)
+                            }
                         },
                         className: "w-full py-3 rounded-xl bg-gradient-to-r from-pink-500 to-purple-500 text-white font-bold hover:from-pink-600 hover:to-purple-600 transition-all transform hover:scale-105",
                         children: "返回大厅"
